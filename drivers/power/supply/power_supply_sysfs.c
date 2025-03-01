@@ -43,7 +43,8 @@ static struct device_attribute power_supply_attrs[];
 static const char * const power_supply_type_text[] = {
 	"Unknown", "Battery", "UPS", "Mains", "USB",
 	"USB_DCP", "USB_CDP", "USB_ACA", "USB_C",
-	"USB_PD", "USB_PD_DRP", "BrickID"
+	"USB_PD", "USB_PD_DRP", "BrickID", "OTG", "HV_Mains",
+	"Prepare_TA", "SMART_NOTG", "END"
 };
 
 static const char * const power_supply_status_text[] = {
@@ -57,7 +58,7 @@ static const char * const power_supply_charge_type_text[] = {
 static const char * const power_supply_health_text[] = {
 	"Unknown", "Good", "Overheat", "Dead", "Over voltage",
 	"Unspecified failure", "Cold", "Watchdog timer expire",
-	"Safety timer expire"
+	"Safety timer expire", "Under voltage"
 };
 
 static const char * const power_supply_technology_text[] = {
@@ -121,7 +122,10 @@ static ssize_t power_supply_show_property(struct device *dev,
 	else if (off >= POWER_SUPPLY_PROP_MODEL_NAME)
 		return sprintf(buf, "%s\n", value.strval);
 
-	return sprintf(buf, "%d\n", value.intval);
+	if (off == POWER_SUPPLY_PROP_CHARGE_COUNTER_EXT)
+		return sprintf(buf, "%lld\n", value.int64val);
+	else
+		return sprintf(buf, "%d\n", value.intval);
 }
 
 static ssize_t power_supply_store_property(struct device *dev,
@@ -188,6 +192,7 @@ static struct device_attribute power_supply_attrs[] = {
 	POWER_SUPPLY_ATTR(present),
 	POWER_SUPPLY_ATTR(online),
 	POWER_SUPPLY_ATTR(authentic),
+	POWER_SUPPLY_ATTR(charging_enabled),
 	POWER_SUPPLY_ATTR(technology),
 	POWER_SUPPLY_ATTR(cycle_count),
 	POWER_SUPPLY_ATTR(voltage_max),
@@ -198,9 +203,11 @@ static struct device_attribute power_supply_attrs[] = {
 	POWER_SUPPLY_ATTR(voltage_avg),
 	POWER_SUPPLY_ATTR(voltage_ocv),
 	POWER_SUPPLY_ATTR(voltage_boot),
+	POWER_SUPPLY_ATTR(input_voltage_regulation),
 	POWER_SUPPLY_ATTR(current_max),
 	POWER_SUPPLY_ATTR(current_now),
 	POWER_SUPPLY_ATTR(current_avg),
+	POWER_SUPPLY_ATTR(current_full),
 	POWER_SUPPLY_ATTR(current_boot),
 	POWER_SUPPLY_ATTR(power_now),
 	POWER_SUPPLY_ATTR(power_avg),
@@ -211,6 +218,8 @@ static struct device_attribute power_supply_attrs[] = {
 	POWER_SUPPLY_ATTR(charge_now),
 	POWER_SUPPLY_ATTR(charge_avg),
 	POWER_SUPPLY_ATTR(charge_counter),
+	POWER_SUPPLY_ATTR(charge_otg_control),
+	POWER_SUPPLY_ATTR(charge_powered_otg_control),
 	POWER_SUPPLY_ATTR(constant_charge_current),
 	POWER_SUPPLY_ATTR(constant_charge_current_max),
 	POWER_SUPPLY_ATTR(constant_charge_voltage),
@@ -245,6 +254,13 @@ static struct device_attribute power_supply_attrs[] = {
 	POWER_SUPPLY_ATTR(precharge_current),
 	POWER_SUPPLY_ATTR(charge_term_current),
 	POWER_SUPPLY_ATTR(calibrate),
+	/* Local extensions */
+	POWER_SUPPLY_ATTR(usb_hc),
+	POWER_SUPPLY_ATTR(usb_otg),
+	POWER_SUPPLY_ATTR(charge_enabled),
+	POWER_SUPPLY_ATTR(fuelgauge_reset),
+	/* Local extensions of type int64_t */
+	POWER_SUPPLY_ATTR(charge_counter_ext),
 	/* Properties of type `const char *' */
 	POWER_SUPPLY_ATTR(model_name),
 	POWER_SUPPLY_ATTR(manufacturer),

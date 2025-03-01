@@ -74,6 +74,12 @@
 #define ARCH_SHF_SMALL 0
 #endif
 
+#ifdef CONFIG_UH_LKMAUTH
+/* Return codes for lkmauth function */
+#define	RET_LKMAUTH_SUCCESS				0
+#define	RET_LKMAUTH_FAIL				-1
+#endif
+
 /*
  * Modules' sections will be aligned on page boundaries
  * to ensure complete separation of code and data, but
@@ -2123,6 +2129,8 @@ void __weak module_arch_freeing_init(struct module *mod)
 {
 }
 
+static void cfi_cleanup(struct module *mod);
+
 /* Free a module, remove from lists, etc. */
 static void free_module(struct module *mod)
 {
@@ -2164,6 +2172,10 @@ static void free_module(struct module *mod)
 
 	/* This may be empty, but that's OK */
 	disable_ro_nx(&mod->init_layout);
+
+	/* Clean up CFI for the module. */
+	cfi_cleanup(mod);
+
 	module_arch_freeing_init(mod);
 	module_memfree(mod->init_layout.base);
 	kfree(mod->args);
@@ -2795,6 +2807,17 @@ static int module_sig_check(struct load_info *info, int flags)
 }
 #endif /* !CONFIG_MODULE_SIG */
 
+#ifdef CONFIG_UH_LKMAUTH
+#ifdef CONFIG_UH_LKM_BLOCK
+static int lkmauth(Elf_Ehdr *hdr, int len)
+{
+	int ret = RET_LKMAUTH_FAIL;
+	pr_warn("UH: lkmauth--LKM is not allowed by Samsung security policy.\n");
+	return ret;
+}
+#endif
+#endif
+
 /* Sanity checks against invalid binaries, wrong arch, weird elf version. */
 static int elf_header_check(struct load_info *info)
 {
@@ -2812,6 +2835,16 @@ static int elf_header_check(struct load_info *info)
 		info->len - info->hdr->e_shoff))
 		return -ENOEXEC;
 
+#ifdef CONFIG_UH_LKMAUTH
+#ifdef CONFIG_UH_LKM_BLOCK
+	if (lkmauth(info->hdr, info->len) != RET_LKMAUTH_SUCCESS) {
+		pr_err
+		    ("UH: lkmauth--unable to load kernel module; module len is %lu.\n",
+		     info->len);
+		return -ENOEXEC;
+	}
+#endif
+#endif
 	return 0;
 }
 
@@ -3361,6 +3394,8 @@ int __weak module_finalize(const Elf_Ehdr *hdr,
 	return 0;
 }
 
+static void cfi_init(struct module *mod);
+
 static int post_relocation(struct module *mod, const struct load_info *info)
 {
 	/* Sort exception table now relocations are done. */
@@ -3372,6 +3407,9 @@ static int post_relocation(struct module *mod, const struct load_info *info)
 
 	/* Setup kallsyms-specific fields. */
 	add_kallsyms(mod, info);
+
+	/* Setup CFI for the module. */
+	cfi_init(mod);
 
 	/* Arch-specific module finalizing. */
 	return module_finalize(info->hdr, info->sechdrs, mod);
@@ -4119,6 +4157,22 @@ int module_kallsyms_on_each_symbol(int (*fn)(void *, const char *,
 	return 0;
 }
 #endif /* CONFIG_KALLSYMS */
+
+static void cfi_init(struct module *mod)
+{
+#ifdef CONFIG_CFI_CLANG
+	mod->cfi_check =
+		(cfi_check_fn)mod_find_symname(mod, CFI_CHECK_FN_NAME);
+	cfi_module_add(mod, module_addr_min, module_addr_max);
+#endif
+}
+
+static void cfi_cleanup(struct module *mod)
+{
+#ifdef CONFIG_CFI_CLANG
+	cfi_module_remove(mod, module_addr_min, module_addr_max);
+#endif
+}
 
 /* Maximum number of characters written by module_flags() */
 #define MODULE_FLAGS_BUF_SIZE (TAINT_FLAGS_COUNT + 4)

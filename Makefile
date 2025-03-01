@@ -310,8 +310,8 @@ SUBARCH := $(shell uname -m | sed -e s/i.86/x86/ -e s/x86_64/x86/ \
 # "make" in the configured kernel build directory always uses that.
 # Default value for CROSS_COMPILE is not to prefix executables
 # Note: Some architectures assign CROSS_COMPILE in their arch/*/Makefile
-ARCH		?= $(SUBARCH)
-CROSS_COMPILE	?= $(CONFIG_CROSS_COMPILE:"%"=%)
+ARCH		?=arm64
+CROSS_COMPILE	?=../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin/aarch64-linux-android-
 
 # Architecture as present in compile.h
 UTS_MACHINE 	:= $(ARCH)
@@ -372,7 +372,8 @@ HOST_LOADLIBES := $(HOST_LFS_LIBS)
 # Make variables (CC, etc...)
 AS		= $(CROSS_COMPILE)as
 LD		= $(CROSS_COMPILE)ld
-CC		= $(CROSS_COMPILE)gcc
+LDGOLD		= $(CROSS_COMPILE)ld.gold
+CC              = $(srctree)/toolchain/clang/host/linux-x86/clang-4639204/bin/clang
 CPP		= $(CC) -E
 AR		= $(CROSS_COMPILE)ar
 NM		= $(CROSS_COMPILE)nm
@@ -386,6 +387,11 @@ DEPMOD		= /sbin/depmod
 PERL		= perl
 PYTHON		= python
 CHECK		= sparse
+
+ifeq ($(CONFIG_EXYNOS_FMP_FIPS),)
+READELF        = $(CROSS_COMPILE)readelf
+export READELF
+endif
 
 CHECKFLAGS     := -D__linux__ -Dlinux -D__STDC__ -Dunix -D__unix__ \
 		  -Wbitwise -Wno-return-void $(CF)
@@ -419,6 +425,7 @@ KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs \
 		   -fno-strict-aliasing -fno-common -fshort-wchar \
 		   -Werror-implicit-function-declaration \
 		   -Wno-format-security \
+		   -Werror \
 		   -std=gnu89
 KBUILD_CPPFLAGS := -D__KERNEL__
 KBUILD_AFLAGS_KERNEL :=
@@ -477,9 +484,31 @@ ifneq ($(KBUILD_SRC),)
 	    $(srctree) $(objtree) $(VERSION) $(PATCHLEVEL)
 endif
 
+ifneq ($(PLATFORM_VERSION), )
+PLATFORM_VERSION_NUMBER=$(shell $(CONFIG_SHELL) $(srctree)/scripts/android-version.sh $(PLATFORM_VERSION))
+MAJOR_VERSION=$(shell $(CONFIG_SHELL) $(srctree)/scripts/android-major-version.sh $(PLATFORM_VERSION))
+export ANDROID_VERSION=$(PLATFORM_VERSION_NUMBER)
+export ANDROID_MAJOR_VERSION=$(MAJOR_VERSION)
+KBUILD_CFLAGS += -DANDROID_VERSION=$(PLATFORM_VERSION_NUMBER)
+KBUILD_CFLAGS += -DANDROID_MAJOR_VERSION=$(MAJOR_VERSION)
+# Example
+# SELINUX_DIR=$(shell $(CONFIG_SHELL) $(srctree)/scripts/find_matching_major.sh "$(srctree)" "security/selinux" "$(ANDROID_MAJOR_VERSION)")
+else
+export ANDROID_VERSION=990000
+KBUILD_CFLAGS += -DANDROID_VERSION=990000
+endif
+PHONY += replace_dirs
+replace_dirs:
+ifneq ($(PLATFORM_VERSION), )
+# Example
+	#@echo "replace selinux from $(SELINUX_DIR)"
+	#$(Q)$(CONFIG_SHELL) $(srctree)/scripts/replace_dir.sh "$(srctree)" "security/selinux" "$(SELINUX_DIR)"
+endif
+
 ifeq ($(cc-name),clang)
 ifneq ($(CROSS_COMPILE),)
-CLANG_FLAGS	:= --target=$(notdir $(CROSS_COMPILE:%-=%))
+CLANG_TRIPLE    ?= $(srctree)/toolchain/clang/host/linux-x86/clang-4639204/bin/aarch64-linux-gnu-
+CLANG_FLAGS	:= --target=$(notdir $(CLANG_TRIPLE:%-=%))
 GCC_TOOLCHAIN_DIR := $(dir $(shell which $(CROSS_COMPILE)elfedit))
 CLANG_FLAGS	+= --prefix=$(GCC_TOOLCHAIN_DIR)
 GCC_TOOLCHAIN	:= $(realpath $(GCC_TOOLCHAIN_DIR)/..)
@@ -638,6 +667,20 @@ CFLAGS_GCOV	:= -fprofile-arcs -ftest-coverage -fno-tree-loop-im $(call cc-disabl
 CFLAGS_KCOV	:= $(call cc-option,-fsanitize-coverage=trace-pc,)
 export CFLAGS_GCOV CFLAGS_KCOV
 
+# Make toolchain changes before including arch/$(SRCARCH)/Makefile to ensure
+# ar/cc/ld-* macros return correct values.
+ifdef CONFIG_LTO_CLANG
+# use GNU gold with LLVMgold for LTO linking, and LD for vmlinux_link
+LDFINAL_vmlinux := $(LD)
+LD		:= $(LDGOLD)
+LDFLAGS		+= -plugin LLVMgold.so
+# use llvm-ar for building symbol tables from IR files, and llvm-dis instead
+# of objdump for processing symbol versions and exports
+LLVM_AR		:= llvm-ar
+LLVM_DIS	:= llvm-dis
+export LLVM_AR LLVM_DIS
+endif
+
 # The arch Makefile can set ARCH_{CPP,A,C}FLAGS to override the default
 # values of the respective KBUILD_* variables
 ARCH_CPPFLAGS :=
@@ -718,6 +761,7 @@ KBUILD_CPPFLAGS += $(call cc-option,-Qunused-arguments,)
 KBUILD_CFLAGS += $(call cc-disable-warning, format-invalid-specifier)
 KBUILD_CFLAGS += $(call cc-disable-warning, gnu)
 KBUILD_CFLAGS += $(call cc-disable-warning, address-of-packed-member)
+KBUILD_CFLAGS += $(call cc-disable-warning, duplicate-decl-specifier)
 # Quiet clang warning: comparison of unsigned expression < 0 is always false
 KBUILD_CFLAGS += $(call cc-disable-warning, tautological-compare)
 # CLANG uses a _MergedGlobals as optimization, but this breaks modpost, as the
@@ -793,6 +837,53 @@ KBUILD_CFLAGS	+= $(call cc-option,-ffunction-sections,)
 KBUILD_CFLAGS	+= $(call cc-option,-fdata-sections,)
 endif
 
+ifdef CONFIG_LTO_CLANG
+lto-clang-flags	:= -flto -fvisibility=hidden
+
+# allow disabling only clang LTO where needed
+DISABLE_LTO_CLANG := -fno-lto -fvisibility=default
+export DISABLE_LTO_CLANG
+endif
+
+ifdef CONFIG_LTO
+lto-flags	:= $(lto-clang-flags)
+KBUILD_CFLAGS	+= $(lto-flags)
+
+DISABLE_LTO	:= $(DISABLE_LTO_CLANG)
+export DISABLE_LTO
+
+# LDFINAL_vmlinux and LDFLAGS_FINAL_vmlinux can be set to override
+# the linker and flags for vmlinux_link.
+export LDFINAL_vmlinux LDFLAGS_FINAL_vmlinux
+endif
+
+ifdef CONFIG_CFI_CLANG
+cfi-clang-flags	+= -fsanitize=cfi
+DISABLE_CFI_CLANG := -fno-sanitize=cfi
+ifdef CONFIG_MODULES
+cfi-clang-flags	+= -fsanitize-cfi-cross-dso
+DISABLE_CFI_CLANG += -fno-sanitize-cfi-cross-dso
+endif
+ifdef CONFIG_CFI_PERMISSIVE
+cfi-clang-flags	+= -fsanitize-recover=cfi -fno-sanitize-trap=cfi
+endif
+
+# also disable CFI when LTO is disabled
+DISABLE_LTO_CLANG += $(DISABLE_CFI_CLANG)
+# allow disabling only clang CFI where needed
+export DISABLE_CFI_CLANG
+endif
+
+ifdef CONFIG_CFI
+# cfi-flags are re-tested in prepare-compiler-check
+cfi-flags	:= $(cfi-clang-flags)
+KBUILD_CFLAGS	+= $(cfi-flags)
+
+DISABLE_CFI	:= $(DISABLE_CFI_CLANG)
+DISABLE_LTO	+= $(DISABLE_CFI)
+export DISABLE_CFI
+endif
+
 # arch Makefile may override CC so keep this after arch Makefile is included
 NOSTDINC_FLAGS += -nostdinc -isystem $(shell $(CC) -print-file-name=include)
 CHECKFLAGS     += $(NOSTDINC_FLAGS)
@@ -864,6 +955,14 @@ endif
 
 ifeq ($(CONFIG_STRIP_ASM_SYMS),y)
 LDFLAGS_vmlinux	+= $(call ld-option, -X,)
+endif
+
+ifneq ($(SEC_BUILD_CONF_USE_FINGERPRINT_TZ), false)
+  ifeq ($(CONFIG_SENSORS_FINGERPRINT), y)
+    ifneq ($(CONFIG_SEC_FACTORY), y)
+      export KBUILD_FP_SENSOR_CFLAGS := -DENABLE_SENSORS_FPRINT_SECURE
+    endif
+  endif
 endif
 
 # Default kernel image to build when no specific target is given.
@@ -1116,6 +1215,22 @@ endif
 # CC_STACKPROTECTOR_STRONG! Why did it build with _REGULAR?!")
 PHONY += prepare-compiler-check
 prepare-compiler-check: FORCE
+# Make sure we're using a supported toolchain with LTO_CLANG
+ifdef CONFIG_LTO_CLANG
+  ifneq ($(call clang-ifversion, -ge, 0500, y), y)
+	@echo Cannot use CONFIG_LTO_CLANG: requires clang 5.0 or later >&2 && exit 1
+  endif
+  ifneq ($(call gold-ifversion, -ge, 112000000, y), y)
+	@echo Cannot use CONFIG_LTO_CLANG: requires GNU gold 1.12 or later >&2 && exit 1
+  endif
+endif
+# Make sure compiler supports LTO flags
+ifdef lto-flags
+  ifeq ($(call cc-option, $(lto-flags)),)
+	@echo Cannot use CONFIG_LTO: $(lto-flags) not supported by compiler \
+		>&2 && exit 1
+  endif
+endif
 # Make sure compiler supports requested stack protector flag.
 ifdef stackp-name
   ifeq ($(call cc-option, $(stackp-flag)),)
@@ -1128,6 +1243,11 @@ ifdef stackp-check
   ifneq ($(shell $(CONFIG_SHELL) $(stackp-check) $(CC) $(KBUILD_CPPFLAGS) $(biarch)),y)
 	@echo Cannot use CONFIG_CC_STACKPROTECTOR_$(stackp-name): \
                   $(stackp-flag) available but compiler is broken >&2 && exit 1
+  endif
+endif
+ifdef cfi-flags
+  ifeq ($(call cc-option, $(cfi-flags)),)
+	@echo Cannot use CONFIG_CFI: $(cfi-flags) not supported by compiler >&2 && exit 1
   endif
 endif
 	@:
@@ -1589,7 +1709,8 @@ clean: $(clean-dirs)
 		-o -name modules.builtin -o -name '.tmp_*.o.*' \
 		-o -name '*.c.[012]*.*' \
 		-o -name '*.ll' \
-		-o -name '*.gcno' \) -type f -print | xargs rm -f
+		-o -name '*.gcno' \
+		-o -name '*.*.symversions' \) -type f -print | xargs rm -f
 
 # Generate tags for editors
 # ---------------------------------------------------------------------------

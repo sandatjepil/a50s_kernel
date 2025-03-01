@@ -52,6 +52,10 @@ static int create_encryption_context_from_policy(struct inode *inode,
 	BUILD_BUG_ON(sizeof(ctx.nonce) != FS_KEY_DERIVATION_NONCE_SIZE);
 	get_random_bytes(ctx.nonce, FS_KEY_DERIVATION_NONCE_SIZE);
 
+#if defined(CONFIG_FSCRYPT_SDP) || defined(CONFIG_DDAR)
+	ctx.knox_flags = 0;
+#endif
+
 	return inode->i_sb->s_cop->set_context(inode, &ctx, sizeof(ctx), NULL);
 }
 
@@ -110,7 +114,7 @@ int fscrypt_ioctl_get_policy(struct file *filp, void __user *arg)
 	struct fscrypt_policy policy;
 	int res;
 
-	if (!inode->i_sb->s_cop->is_encrypted(inode))
+	if (!IS_ENCRYPTED(inode))
 		return -ENODATA;
 
 	res = inode->i_sb->s_cop->get_context(inode, &ctx, sizeof(ctx));
@@ -167,11 +171,11 @@ int fscrypt_has_permitted_context(struct inode *parent, struct inode *child)
 		return 1;
 
 	/* No restrictions if the parent directory is unencrypted */
-	if (!cops->is_encrypted(parent))
+	if (!IS_ENCRYPTED(parent))
 		return 1;
 
 	/* Encrypted directories must not contain unencrypted files */
-	if (!cops->is_encrypted(child))
+	if (!IS_ENCRYPTED(child))
 		return 0;
 
 	/*
@@ -258,6 +262,27 @@ int fscrypt_inherit_context(struct inode *parent, struct inode *child,
 	       FS_KEY_DESCRIPTOR_SIZE);
 	get_random_bytes(ctx.nonce, FS_KEY_DERIVATION_NONCE_SIZE);
 	BUILD_BUG_ON(sizeof(ctx) != FSCRYPT_SET_CONTEXT_MAX_SIZE);
+#if defined(CONFIG_DDAR) || defined(CONFIG_FSCRYPT_SDP)
+	ctx.knox_flags = 0;
+#endif
+
+#ifdef CONFIG_DDAR
+	res = dd_test_and_inherit_context(&ctx, parent, child, ci, fs_data);
+	if(res) {
+		dd_error("failed to inherit dd policy\n");
+		return res;
+	}
+#endif
+
+#ifdef CONFIG_FSCRYPT_SDP
+	res = fscrypt_sdp_inherit_context(parent, child, &ctx, fs_data);
+	if (res) {
+		printk_once(KERN_WARNING
+				"%s: Failed to set sensitive ongoing flag (err:%d)\n", __func__, res);
+		return res;
+	}
+#endif
+
 	res = parent->i_sb->s_cop->set_context(child, &ctx,
 						sizeof(ctx), fs_data);
 	if (res)

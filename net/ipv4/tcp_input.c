@@ -95,6 +95,7 @@ int sysctl_tcp_min_rtt_wlen __read_mostly = 300;
 int sysctl_tcp_moderate_rcvbuf __read_mostly = 1;
 int sysctl_tcp_early_retrans __read_mostly = 3;
 int sysctl_tcp_invalid_ratelimit __read_mostly = HZ/2;
+int sysctl_tcp_default_init_rwnd __read_mostly = TCP_INIT_CWND * 2;
 
 #define FLAG_DATA		0x01 /* Incoming frame contained data.		*/
 #define FLAG_WIN_UPDATE		0x02 /* Incoming ACK was a window update.	*/
@@ -5353,8 +5354,10 @@ static bool tcp_validate_incoming(struct sock *sk, struct sk_buff *skb,
 	 */
 	if (th->syn) {
 syn_challenge:
-		if (syn_inerr)
+		if (syn_inerr) {
 			TCP_INC_STATS(sock_net(sk), TCP_MIB_INERRS);
+			DROPDUMP_QUEUE_SKB(skb, NET_DROPDUMP_TCP_MIB_INERRS);
+		}
 		NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPSYNCHALLENGE);
 		tcp_send_challenge_ack(sk, skb);
 		goto discard;
@@ -5473,6 +5476,7 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb,
 				return;
 			} else { /* Header too small */
 				TCP_INC_STATS(sock_net(sk), TCP_MIB_INERRS);
+				DROPDUMP_QUEUE_SKB(skb, NET_DROPDUMP_TCP_MIB_INERRS);
 				goto discard;
 			}
 		} else {
@@ -5553,8 +5557,9 @@ step5:
 
 csum_error:
 	TCP_INC_STATS(sock_net(sk), TCP_MIB_CSUMERRORS);
+	DROPDUMP_QUEUE_SKB(skb, NET_DROPDUMP_TCP_MIB_CSUMERRORS);
 	TCP_INC_STATS(sock_net(sk), TCP_MIB_INERRS);
-
+	DROPDUMP_QUEUE_SKB(skb, NET_DROPDUMP_TCP_MIB_INERRS);
 discard:
 	tcp_drop(sk, skb);
 }
