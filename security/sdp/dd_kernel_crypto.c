@@ -485,9 +485,10 @@ int dd_sec_crypt_bio_pages(struct dd_info *info, struct bio *orig,
 		}
     }
 
-    memcpy(&orig->bi_iter, &iter_backup, sizeof(struct bvec_iter));
-    if (rw == DD_ENCRYPT)
-        memcpy(&clone->bi_iter, &iter_backup, sizeof(struct bvec_iter));
+	memcpy(&orig->bi_iter, &iter_backup, sizeof(struct bvec_iter));
+	if (rw == DD_ENCRYPT) {
+		memcpy(&clone->bi_iter, &iter_backup, sizeof(struct bvec_iter));
+	}
 
 	return 0;
 }
